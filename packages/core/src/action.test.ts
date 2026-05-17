@@ -93,4 +93,26 @@ describe("action", () => {
       published: boolean;
     }>();
   });
+
+  it("stores response contracts on actions", () => {
+    const getUser = action({
+      method: "GET",
+      path: "/users/:id",
+      response: {
+        200: z.object({
+          id: z.string(),
+          name: z.string(),
+        }),
+      },
+      handler: ({ params }) => ({
+        status: 200,
+        body: {
+          id: params.id,
+          name: "Ada",
+        },
+      }),
+    });
+
+    expect(getUser.response?.[200]).toBeDefined();
+  });
 });
