@@ -3,24 +3,26 @@ import type { ActionContractResult, ActionResponseDefinitions } from "./response
 import type { InferSchemaOutput, RawQuery } from "./schemas.js";
 import type { HttpMethod, MaybePromise } from "./types.js";
 
-export interface ActionContext<
+export type ActionContext<
   TPath extends string,
   TServices,
+  TContext extends object = {},
   TParamsSchema = undefined,
   TQuerySchema = undefined,
   TBodySchema = undefined,
-> {
+> = TContext & {
   request: Request;
   params: InferSchemaOutput<TParamsSchema, PathParams<TPath>>;
   query: InferSchemaOutput<TQuerySchema, RawQuery>;
   body: InferSchemaOutput<TBodySchema, unknown>;
   services: TServices;
-}
+};
 
 export interface ActionDefinition<
   TMethod extends HttpMethod = HttpMethod,
   TPath extends string = string,
   TServices = Record<string, never>,
+  TContext extends object = {},
   TParamsSchema = undefined,
   TQuerySchema = undefined,
   TBodySchema = undefined,
@@ -35,7 +37,7 @@ export interface ActionDefinition<
   readonly body?: TBodySchema | undefined;
   readonly response?: TResponses | undefined;
   readonly handler: (
-    context: ActionContext<TPath, TServices, TParamsSchema, TQuerySchema, TBodySchema>,
+    context: ActionContext<TPath, TServices, TContext, TParamsSchema, TQuerySchema, TBodySchema>,
   ) => MaybePromise<TResult>;
 }
 
@@ -43,6 +45,7 @@ export interface ActionOptions<
   TMethod extends HttpMethod,
   TPath extends string,
   TServices,
+  TContext extends object,
   TParamsSchema,
   TQuerySchema,
   TBodySchema,
@@ -56,7 +59,7 @@ export interface ActionOptions<
   body?: TBodySchema | undefined;
   response?: TResponses | undefined;
   handler: (
-    context: ActionContext<TPath, TServices, TParamsSchema, TQuerySchema, TBodySchema>,
+    context: ActionContext<TPath, TServices, TContext, TParamsSchema, TQuerySchema, TBodySchema>,
   ) => MaybePromise<TResult>;
 }
 
@@ -64,6 +67,7 @@ export function action<
   TMethod extends HttpMethod,
   TPath extends string,
   TServices = Record<string, never>,
+  TContext extends object = {},
   TParamsSchema = undefined,
   TQuerySchema = undefined,
   TBodySchema = undefined,
@@ -74,13 +78,14 @@ export function action<
     TMethod,
     TPath,
     TServices,
+    TContext,
     TParamsSchema,
     TQuerySchema,
     TBodySchema,
     TResponses,
     TResult
   >,
-): ActionDefinition<TMethod, TPath, TServices, TParamsSchema, TQuerySchema, TBodySchema, TResponses, TResult> {
+): ActionDefinition<TMethod, TPath, TServices, TContext, TParamsSchema, TQuerySchema, TBodySchema, TResponses, TResult> {
   return {
     kind: "action",
     method: options.method,

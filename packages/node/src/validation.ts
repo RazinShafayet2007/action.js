@@ -9,6 +9,7 @@ export function validateInput<TInput, TOutput>(
   source: InputSource,
   schema: SchemaLike<TOutput> | undefined,
   input: TInput,
+  requestId?: string,
 ): ValidationResult<TInput | TOutput> {
   if (!schema) {
     return {
@@ -33,17 +34,22 @@ export function validateInput<TInput, TOutput>(
         path: formatIssuePath(source, issue.path),
         message: issue.message,
       })),
+      requestId,
     ),
   };
 }
 
-export function createValidationErrorResponse(issues: Array<{ path: string; message: string }>): Response {
+export function createValidationErrorResponse(
+  issues: Array<{ path: string; message: string }>,
+  requestId?: string,
+): Response {
   return jsonResponse(
     {
       error: {
         code: "VALIDATION_ERROR",
         message: "Invalid request input",
         issues,
+        requestId,
       },
     },
     400,

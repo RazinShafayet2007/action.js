@@ -25,7 +25,11 @@ export function parseQuery(searchParams: URLSearchParams): RawQuery {
   return query;
 }
 
-export async function parseRequestBody(request: Request, expectsJsonBody: boolean): Promise<ValidationResult<unknown>> {
+export async function parseRequestBody(
+  request: Request,
+  expectsJsonBody: boolean,
+  requestId?: string,
+): Promise<ValidationResult<unknown>> {
   if (request.method === "GET" || request.method === "HEAD" || request.body === null) {
     return {
       success: true,
@@ -48,12 +52,15 @@ export async function parseRequestBody(request: Request, expectsJsonBody: boolea
     if (expectsJsonBody) {
       return {
         success: false,
-        response: createValidationErrorResponse([
-          {
-            path: "body",
-            message: "Expected application/json request body",
-          },
-        ]),
+        response: createValidationErrorResponse(
+          [
+            {
+              path: "body",
+              message: "Expected application/json request body",
+            },
+          ],
+          requestId,
+        ),
       };
     }
 
@@ -71,12 +78,15 @@ export async function parseRequestBody(request: Request, expectsJsonBody: boolea
   } catch {
     return {
       success: false,
-      response: createValidationErrorResponse([
-        {
-          path: "body",
-          message: "Invalid JSON body",
-        },
-      ]),
+      response: createValidationErrorResponse(
+        [
+          {
+            path: "body",
+            message: "Invalid JSON body",
+          },
+        ],
+        requestId,
+      ),
     };
   }
 }

@@ -40,7 +40,8 @@ describe("action", () => {
       path: "/teams/:teamId/users/:userId",
       handler: ({ params, services }: ActionContext<
         "/teams/:teamId/users/:userId",
-        { greeting: string }
+        { greeting: string },
+        {}
       >) => ({
         status: 200,
         body: `${services.greeting} ${params.teamId}/${params.userId}`,
@@ -48,7 +49,7 @@ describe("action", () => {
     });
 
     expectTypeOf(createGreeting.handler).parameters.toEqualTypeOf<[
-      ActionContext<"/teams/:teamId/users/:userId", { greeting: string }>,
+      ActionContext<"/teams/:teamId/users/:userId", { greeting: string }, {}>,
     ]>();
   });
 

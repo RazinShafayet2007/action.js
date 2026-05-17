@@ -1,4 +1,10 @@
-import { isActionErrorDefinition, type ActionResponse, type ActionResponseDefinitions, type SchemaIssue, type SchemaLike } from "@action-js/core";
+import {
+  isActionErrorDefinition,
+  type ActionResponse,
+  type ActionResponseDefinitions,
+  type SchemaIssue,
+  type SchemaLike,
+} from "@action-js/core";
 
 import { jsonResponse, toHttpResponse } from "./http.js";
 import type { ValidationResult } from "./shared.js";
@@ -6,6 +12,7 @@ import type { ValidationResult } from "./shared.js";
 export function finalizeActionResponse(
   result: ActionResponse | Response,
   responseDefinitions: ActionResponseDefinitions | undefined,
+  requestId?: string,
 ): ValidationResult<Response> {
   if (result instanceof Response) {
     return {
@@ -14,7 +21,7 @@ export function finalizeActionResponse(
     };
   }
 
-  const validatedResult = validateActionResponseContract(result, responseDefinitions);
+  const validatedResult = validateActionResponseContract(result, responseDefinitions, requestId);
 
   if (!validatedResult.success) {
     return validatedResult;
@@ -26,13 +33,17 @@ export function finalizeActionResponse(
   };
 }
 
-export function createInvalidActionResponseResponse(issues: Array<{ path: string; message: string }>): Response {
+export function createInvalidActionResponseResponse(
+  issues: Array<{ path: string; message: string }>,
+  requestId?: string,
+): Response {
   return jsonResponse(
     {
       error: {
         code: "INVALID_ACTION_RESPONSE",
         message: "Action response does not match its declared contract",
         issues,
+        requestId,
       },
     },
     500,
@@ -42,6 +53,7 @@ export function createInvalidActionResponseResponse(issues: Array<{ path: string
 function validateActionResponseContract(
   result: ActionResponse,
   responseDefinitions: ActionResponseDefinitions | undefined,
+  requestId?: string,
 ): ValidationResult<ActionResponse> {
   if (responseDefinitions === undefined) {
     return {
@@ -55,24 +67,30 @@ function validateActionResponseContract(
   if (definition === undefined) {
     return {
       success: false,
-      response: createInvalidActionResponseResponse([
-        {
-          path: "response.status",
-          message: `Status ${result.status} is not declared in the action response contract`,
-        },
-      ]),
+      response: createInvalidActionResponseResponse(
+        [
+          {
+            path: "response.status",
+            message: `Status ${result.status} is not declared in the action response contract`,
+          },
+        ],
+        requestId,
+      ),
     };
   }
 
   if (isActionErrorDefinition(definition)) {
     return {
       success: false,
-      response: createInvalidActionResponseResponse([
-        {
-          path: "response.status",
-          message: `Status ${result.status} is declared as an error response and must be thrown with actionError()`,
-        },
-      ]),
+      response: createInvalidActionResponseResponse(
+        [
+          {
+            path: "response.status",
+            message: `Status ${result.status} is declared as an error response and must be thrown with actionError()`,
+          },
+        ],
+        requestId,
+      ),
     };
   }
 
@@ -87,6 +105,7 @@ function validateActionResponseContract(
           path: formatResponseIssuePath(issue.path),
           message: issue.message,
         })),
+        requestId,
       ),
     };
   }
