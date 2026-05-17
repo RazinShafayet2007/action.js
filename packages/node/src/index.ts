@@ -2,27 +2,55 @@ import type {
   ActionDefinition,
   ActionHandlerResult,
   HttpMethod,
-  PathParams,
+  RawQuery,
+  SchemaIssue,
+  SchemaLike,
 } from "@action-js/core";
 
 export const packageName = "@action-js/node";
 
+type AnySchema = SchemaLike<any> | undefined;
+
+type AnyActionDefinition<TServices> = ActionDefinition<
+  HttpMethod,
+  string,
+  TServices,
+  AnySchema,
+  AnySchema,
+  AnySchema,
+  ActionHandlerResult
+>;
+
 interface RegisteredAction<TServices> {
-  definition: ActionDefinition<HttpMethod, string, TServices, ActionHandlerResult>;
+  definition: AnyActionDefinition<TServices>;
 }
 
 export interface CreateActionAppOptions<TServices> {
-  actions?: ReadonlyArray<ActionDefinition<HttpMethod, string, TServices, ActionHandlerResult>>;
+  actions?: ReadonlyArray<AnyActionDefinition<TServices>>;
   services?: TServices;
 }
 
 export interface ActionApp<TServices> {
-  readonly actions: ReadonlyArray<ActionDefinition<HttpMethod, string, TServices, ActionHandlerResult>>;
-  action<TMethod extends HttpMethod, TPath extends string, TResult extends ActionHandlerResult>(
-    definition: ActionDefinition<TMethod, TPath, TServices, TResult>,
+  readonly actions: ReadonlyArray<AnyActionDefinition<TServices>>;
+  action<
+    TMethod extends HttpMethod,
+    TPath extends string,
+    TParamsSchema,
+    TQuerySchema,
+    TBodySchema,
+    TResult extends ActionHandlerResult,
+  >(
+    definition: ActionDefinition<TMethod, TPath, TServices, TParamsSchema, TQuerySchema, TBodySchema, TResult>,
   ): ActionApp<TServices>;
-  route<TMethod extends HttpMethod, TPath extends string, TResult extends ActionHandlerResult>(
-    definition: ActionDefinition<TMethod, TPath, TServices, TResult>,
+  route<
+    TMethod extends HttpMethod,
+    TPath extends string,
+    TParamsSchema,
+    TQuerySchema,
+    TBodySchema,
+    TResult extends ActionHandlerResult,
+  >(
+    definition: ActionDefinition<TMethod, TPath, TServices, TParamsSchema, TQuerySchema, TBodySchema, TResult>,
   ): ActionApp<TServices>;
   fetch(request: Request): Promise<Response>;
 }
@@ -35,7 +63,7 @@ export function createActionApp<TServices = Record<string, never>>(
 
   for (const definition of options.actions ?? []) {
     actions.push({
-      definition: definition as ActionDefinition<HttpMethod, string, TServices, ActionHandlerResult>,
+      definition: definition as AnyActionDefinition<TServices>,
     });
   }
 
@@ -46,7 +74,7 @@ export function createActionApp<TServices = Record<string, never>>(
 
     action(definition) {
       actions.push({
-        definition: definition as ActionDefinition<HttpMethod, string, TServices, ActionHandlerResult>,
+        definition: definition as AnyActionDefinition<TServices>,
       });
 
       return app;
@@ -58,9 +86,10 @@ export function createActionApp<TServices = Record<string, never>>(
 
     async fetch(request) {
       const url = new URL(request.url);
+      const method = request.method.toUpperCase();
 
       for (const registeredAction of actions) {
-        if (registeredAction.definition.method !== request.method.toUpperCase()) {
+        if (registeredAction.definition.method !== method) {
           continue;
         }
 
@@ -70,11 +99,38 @@ export function createActionApp<TServices = Record<string, never>>(
           continue;
         }
 
+        const query = parseQuery(url.searchParams);
+
+        const paramsResult = validateInput("params", registeredAction.definition.params, params);
+
+        if (!paramsResult.success) {
+          return paramsResult.response;
+        }
+
+        const queryResult = validateInput("query", registeredAction.definition.query, query);
+
+        if (!queryResult.success) {
+          return queryResult.response;
+        }
+
+        const bodyResult = await parseRequestBody(request, registeredAction.definition.body !== undefined);
+
+        if (!bodyResult.success) {
+          return bodyResult.response;
+        }
+
+        const validatedBodyResult = validateInput("body", registeredAction.definition.body, bodyResult.data);
+
+        if (!validatedBodyResult.success) {
+          return validatedBodyResult.response;
+        }
+
         try {
           const result = await registeredAction.definition.handler({
             request,
-            params: params as PathParams<typeof registeredAction.definition.path>,
-            query: url.searchParams,
+            params: paramsResult.data,
+            query: queryResult.data,
+            body: validatedBodyResult.data,
             services,
           });
 
@@ -106,6 +162,16 @@ export function createActionApp<TServices = Record<string, never>>(
 
   return app;
 }
+
+type ValidationResult<T> =
+  | {
+      success: true;
+      data: T;
+    }
+  | {
+      success: false;
+      response: Response;
+    };
 
 function normalizePath(path: string): string {
   if (path.length > 1 && path.endsWith("/")) {
@@ -143,6 +209,143 @@ function matchPath(pathPattern: string, pathname: string): Record<string, string
   }
 
   return params;
+}
+
+function parseQuery(searchParams: URLSearchParams): RawQuery {
+  const query: RawQuery = {};
+
+  for (const [key, value] of searchParams) {
+    const existingValue = query[key];
+
+    if (existingValue === undefined) {
+      query[key] = value;
+      continue;
+    }
+
+    if (Array.isArray(existingValue)) {
+      existingValue.push(value);
+      continue;
+    }
+
+    query[key] = [existingValue, value];
+  }
+
+  return query;
+}
+
+function validateInput<TInput, TOutput>(
+  source: "params" | "query" | "body",
+  schema: SchemaLike<TOutput> | undefined,
+  input: TInput,
+): ValidationResult<TInput | TOutput> {
+  if (!schema) {
+    return {
+      success: true,
+      data: input,
+    };
+  }
+
+  const result = schema.safeParse(input);
+
+  if (result.success) {
+    return {
+      success: true,
+      data: result.data,
+    };
+  }
+
+  return {
+    success: false,
+    response: createValidationErrorResponse(
+      result.error.issues.map((issue) => ({
+        path: formatIssuePath(source, issue.path),
+        message: issue.message,
+      })),
+    ),
+  };
+}
+
+async function parseRequestBody(request: Request, expectsJsonBody: boolean): Promise<ValidationResult<unknown>> {
+  if (request.method === "GET" || request.method === "HEAD" || request.body === null) {
+    return {
+      success: true,
+      data: undefined,
+    };
+  }
+
+  const rawBody = await request.text();
+
+  if (rawBody === "") {
+    return {
+      success: true,
+      data: undefined,
+    };
+  }
+
+  const contentType = request.headers.get("content-type");
+
+  if (contentType !== null && !isJsonContentType(contentType)) {
+    if (expectsJsonBody) {
+      return {
+        success: false,
+        response: createValidationErrorResponse([
+          {
+            path: "body",
+            message: "Expected application/json request body",
+          },
+        ]),
+      };
+    }
+
+    return {
+      success: true,
+      data: rawBody,
+    };
+  }
+
+  try {
+    return {
+      success: true,
+      data: JSON.parse(rawBody),
+    };
+  } catch {
+    return {
+      success: false,
+      response: createValidationErrorResponse([
+        {
+          path: "body",
+          message: "Invalid JSON body",
+        },
+      ]),
+    };
+  }
+}
+
+function createValidationErrorResponse(issues: Array<{ path: string; message: string }>): Response {
+  return jsonResponse(
+    {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Invalid request input",
+        issues,
+      },
+    },
+    400,
+  );
+}
+
+function formatIssuePath(source: "params" | "query" | "body", path: SchemaIssue["path"]): string {
+  const issuePath = path.map((segment) => String(segment));
+
+  if (issuePath.length === 0) {
+    return source;
+  }
+
+  return [source, ...issuePath].join(".");
+}
+
+function isJsonContentType(contentType: string): boolean {
+  return contentType.toLowerCase().includes("application/json");
 }
 
 function toResponse(result: ActionHandlerResult): Response {
