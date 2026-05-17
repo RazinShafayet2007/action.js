@@ -1,0 +1,27 @@
+{
+  "name": "@action-js/testing",
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@action-js/core": "workspace:*",
+    "@action-js/node": "workspace:*"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --eval \"console.log('No tests yet for @action-js/testing')\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

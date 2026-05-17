@@ -1,0 +1,18 @@
+{
+  "name": "minimal-api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rm -rf dist",
+    "dev": "tsc -p tsconfig.json --watch",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --eval \"console.log('No tests yet for minimal-api')\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@action-js/core": "workspace:*",
+    "@action-js/node": "workspace:*"
+  }
+}
