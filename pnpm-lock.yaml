@@ -41,6 +41,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@action-js/client':
+        specifier: workspace:*
+        version: link:../client
       '@action-js/core':
         specifier: workspace:*
         version: link:../core
