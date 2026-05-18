@@ -17,6 +17,7 @@
     "dist"
   ],
   "dependencies": {
+    "@action-js/client": "workspace:*",
     "@action-js/core": "workspace:*",
     "@action-js/openapi": "workspace:*",
     "tsx": "^4.20.6"
