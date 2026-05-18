@@ -14,13 +14,16 @@
     "dist"
   ],
   "dependencies": {
-    "@action-js/core": "workspace:*"
+    "@action-js/core": "workspace:*",
+    "@action-js/node": "workspace:*",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.24.6"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "node --eval \"console.log('No tests yet for @action-js/openapi')\"",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   }
 }
