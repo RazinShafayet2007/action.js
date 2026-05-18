@@ -3,6 +3,7 @@ import type { ActionContractResult, ActionDefinition, ActionResponseDefinitions,
 import { handleHandlerError } from "./errors.js";
 import { jsonResponse } from "./http.js";
 import type { MiddlewareHandler } from "./middleware.js";
+import type { ActionPlugin, PluginErrorContext, PluginRequestContext, PluginResponseContext } from "./plugin.js";
 import { parseQuery, parseRequestBody } from "./request.js";
 import { finalizeActionResponse } from "./response-contracts.js";
 import { matchPath } from "./routing.js";
@@ -11,6 +12,12 @@ import { validateInput } from "./validation.js";
 
 interface RegisteredAction<TServices> {
   definition: AnyActionDefinition<TServices, any>;
+}
+
+interface LifecycleHooks<TServices> {
+  onRequest: Array<(context: PluginRequestContext<TServices, any>) => Promise<void>>;
+  onResponse: Array<(context: PluginResponseContext<TServices, any>) => Promise<void>>;
+  onError: Array<(context: PluginErrorContext<TServices, any>) => Promise<void>>;
 }
 
 export interface CreateActionAppOptions<TServices, TContext extends object = {}> {
@@ -22,6 +29,9 @@ export interface ActionApp<TServices, TContext extends object = {}> {
   readonly actions: ReadonlyArray<AnyActionDefinition<TServices, TContext>>;
   use<TExtension extends object>(
     middleware: MiddlewareHandler<TServices, TContext, TExtension>,
+  ): ActionApp<TServices, TContext & TExtension>;
+  plugin<TExtension extends object>(
+    definition: ActionPlugin<TServices, TContext, TExtension>,
   ): ActionApp<TServices, TContext & TExtension>;
   action<
     TMethod extends HttpMethod,
@@ -74,6 +84,11 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
   const services = options.services ?? ({} as TServices);
   const actions: RegisteredAction<TServices>[] = [];
   const middlewares: Array<MiddlewareHandler<TServices, any, any>> = [];
+  const hooks: LifecycleHooks<TServices> = {
+    onRequest: [],
+    onResponse: [],
+    onError: [],
+  };
 
   for (const definition of options.actions ?? []) {
     actions.push({
@@ -88,6 +103,32 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
 
     use<TExtension extends object>(middleware: MiddlewareHandler<TServices, TCurrentContext, TExtension>) {
       middlewares.push(middleware as MiddlewareHandler<TServices, any, any>);
+      return createAppApi<TCurrentContext & TExtension>();
+    },
+
+    plugin<TExtension extends object>(definition: ActionPlugin<TServices, TCurrentContext, TExtension>) {
+      for (const actionDefinition of definition.actions ?? []) {
+        actions.push({
+          definition: actionDefinition as AnyActionDefinition<TServices, any>,
+        });
+      }
+
+      for (const middleware of definition.middlewares ?? []) {
+        middlewares.push(middleware as MiddlewareHandler<TServices, any, any>);
+      }
+
+      if (definition.hooks?.onRequest) {
+        hooks.onRequest.push(async (context) => definition.hooks?.onRequest?.(context));
+      }
+
+      if (definition.hooks?.onResponse) {
+        hooks.onResponse.push(async (context) => definition.hooks?.onResponse?.(context));
+      }
+
+      if (definition.hooks?.onError) {
+        hooks.onError.push(async (context) => definition.hooks?.onError?.(context));
+      }
+
       return createAppApi<TCurrentContext & TExtension>();
     },
 
@@ -108,7 +149,7 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
       const middlewareContext = createMiddlewareContext(request, services, contextValues);
 
       return runMiddlewares(middlewares, middlewareContext, () =>
-        dispatchRequest(request, services, actions, contextValues),
+        dispatchRequest(request, services, actions, hooks, contextValues),
       );
     },
   });
@@ -120,11 +161,19 @@ async function dispatchRequest<TServices>(
   request: Request,
   services: TServices,
   actions: Array<RegisteredAction<TServices>>,
+  hooks: LifecycleHooks<TServices>,
   contextValues: ContextValues,
 ): Promise<Response> {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const requestId = getRequestId(contextValues);
+  const hookContext = createHookContext(request, services, contextValues);
+
+  try {
+    await runRequestHooks(hooks.onRequest, hookContext);
+  } catch (error) {
+    return createErrorResponse(error, undefined, hookContext, hooks, requestId);
+  }
 
   for (const registeredAction of actions) {
     if (registeredAction.definition.method !== method) {
@@ -142,25 +191,25 @@ async function dispatchRequest<TServices>(
     const paramsResult = validateInput("params", registeredAction.definition.params, params, requestId);
 
     if (!paramsResult.success) {
-      return paramsResult.response;
+      return finalizeResponse(paramsResult.response, hookContext, hooks);
     }
 
     const queryResult = validateInput("query", registeredAction.definition.query, query, requestId);
 
     if (!queryResult.success) {
-      return queryResult.response;
+      return finalizeResponse(queryResult.response, hookContext, hooks);
     }
 
     const bodyResult = await parseRequestBody(request, registeredAction.definition.body !== undefined, requestId);
 
     if (!bodyResult.success) {
-      return bodyResult.response;
+      return finalizeResponse(bodyResult.response, hookContext, hooks);
     }
 
     const validatedBodyResult = validateInput("body", registeredAction.definition.body, bodyResult.data, requestId);
 
     if (!validatedBodyResult.success) {
-      return validatedBodyResult.response;
+      return finalizeResponse(validatedBodyResult.response, hookContext, hooks);
     }
 
     try {
@@ -175,25 +224,27 @@ async function dispatchRequest<TServices>(
 
       const responseResult = finalizeActionResponse(result, registeredAction.definition.response, requestId);
 
-      if (!responseResult.success) {
-        return responseResult.response;
-      }
+      const response = responseResult.success ? responseResult.data : responseResult.response;
 
-      return responseResult.data;
+      return finalizeResponse(response, hookContext, hooks);
     } catch (error) {
-      return handleHandlerError(error, registeredAction.definition.response, requestId);
+      return createErrorResponse(error, registeredAction.definition.response, hookContext, hooks, requestId);
     }
   }
 
-  return jsonResponse(
-    {
-      error: {
-        code: "ACTION_NOT_FOUND",
-        message: `No action matched ${method} ${url.pathname}`,
-        requestId,
+  return finalizeResponse(
+    jsonResponse(
+      {
+        error: {
+          code: "ACTION_NOT_FOUND",
+          message: `No action matched ${method} ${url.pathname}`,
+          requestId,
+        },
       },
-    },
-    404,
+      404,
+    ),
+    hookContext,
+    hooks,
   );
 }
 
@@ -216,6 +267,14 @@ function createMiddlewareContext<TServices>(
   };
 
   return middlewareContext;
+}
+
+function createHookContext<TServices>(request: Request, services: TServices, contextValues: ContextValues) {
+  return {
+    ...contextValues,
+    request,
+    services,
+  } as PluginRequestContext<TServices, any>;
 }
 
 async function runMiddlewares(
@@ -241,6 +300,75 @@ async function runMiddlewares(
   };
 
   return runner(0);
+}
+
+async function runRequestHooks<TServices>(
+  hooks: Array<(context: PluginRequestContext<TServices, any>) => Promise<void>>,
+  context: PluginRequestContext<TServices, any>,
+): Promise<void> {
+  for (const hook of hooks) {
+    await hook(context);
+  }
+}
+
+async function runResponseHooks<TServices>(
+  hooks: Array<(context: PluginResponseContext<TServices, any>) => Promise<void>>,
+  context: PluginRequestContext<TServices, any>,
+  response: Response,
+): Promise<Response> {
+  for (const hook of hooks) {
+    await hook({
+      ...context,
+      response,
+    });
+  }
+
+  return response;
+}
+
+async function runErrorHooks<TServices>(
+  hooks: Array<(context: PluginErrorContext<TServices, any>) => Promise<void>>,
+  context: PluginRequestContext<TServices, any>,
+  error: unknown,
+): Promise<void> {
+  for (const hook of hooks) {
+    await hook({
+      ...context,
+      error,
+    });
+  }
+}
+
+async function finalizeResponse<TServices>(
+  response: Response,
+  context: PluginRequestContext<TServices, any>,
+  hooks: LifecycleHooks<TServices>,
+): Promise<Response> {
+  try {
+    return await runResponseHooks(hooks.onResponse, context, response);
+  } catch (error) {
+    return createErrorResponse(error, undefined, context, hooks, getRequestId(context as ContextValues));
+  }
+}
+
+async function createErrorResponse<TServices>(
+  error: unknown,
+  responseDefinitions: ActionResponseDefinitions | undefined,
+  context: PluginRequestContext<TServices, any>,
+  hooks: LifecycleHooks<TServices>,
+  requestId?: string,
+): Promise<Response> {
+  try {
+    await runErrorHooks(hooks.onError, context, error);
+  } catch (hookError) {
+    error = hookError;
+    responseDefinitions = undefined;
+  }
+
+  return finalizeResponse(handleHandlerError(error, responseDefinitions, requestId), context, {
+    ...hooks,
+    onError: [],
+  });
 }
 
 function getRequestId(contextValues: ContextValues): string | undefined {
