@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest a new feature or improvement for Action.js.
+title: "feat: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting an improvement. Please focus on the user problem and API shape.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What problem are you trying to solve?
+      placeholder: I want to ... because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the API or workflow you want.
+      placeholder: |
+        I would like to write something like:
+
+        const x = ...
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other designs you considered.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: roadmap-area
+    attributes:
+      label: Area
+      options:
+        - Core
+        - OpenAPI
+        - Client
+        - CLI
+        - Auth
+        - Plugins
+        - Testing
+        - Runtime adapters
+        - Docs
+        - Other
+    validations:
+      required: true
