@@ -38,6 +38,12 @@ importers:
       '@action-js/core':
         specifier: workspace:*
         version: link:../core
+      '@action-js/node':
+        specifier: workspace:*
+        version: link:../node
+      '@action-js/testing':
+        specifier: workspace:*
+        version: link:../testing
 
   packages/cli:
     dependencies:
