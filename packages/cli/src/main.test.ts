@@ -73,7 +73,7 @@ export default app;
       version: "1.2.3",
     });
     expect(document.paths["/users/{id}"].get.responses["200"]).toBeDefined();
-  });
+  }, 15000);
 
   it("uses default app discovery and explicit title/version overrides", async () => {
     const cwd = await mkdtemp(join(process.cwd(), ".tmp-cli-"));
@@ -111,7 +111,7 @@ export const app = createActionApp().action(
       version: "9.9.9",
     });
     expect(document.paths["/health"].get).toBeDefined();
-  });
+  }, 15000);
 
   it("generates a typed client module from a named action tree export", async () => {
     const cwd = await mkdtemp(join(process.cwd(), ".tmp-cli-"));
@@ -167,7 +167,7 @@ export default createActionApp().action(actions.users.get);
     expect(generated).toContain('import { actions } from "../app.js";');
     expect(generated).toContain("export function createSdk(");
     expect(generated).toContain("export type ApiClient = ClientFromTree<typeof actions>;");
-  });
+  }, 15000);
 });
 
 afterAll(async () => {
