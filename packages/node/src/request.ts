@@ -37,7 +37,7 @@ export async function parseRequestBody(
     };
   }
 
-  const rawBody = await request.text();
+  const rawBody = await request.clone().text();
 
   if (rawBody === "") {
     return {
