@@ -1,7 +1,9 @@
-import type { ActionContractResult, ActionDefinition, ActionResponseDefinitions, HttpMethod } from "@action-js/core";
+import type { ActionContractResult, ActionDefinition, ActionResponseDefinitions, HttpMethod, MaybePromise } from "@action-js/core";
 
 import { handleHandlerError } from "./errors.js";
 import { jsonResponse } from "./http.js";
+import { getActionAppInternals, setActionAppInternals } from "./internals.js";
+import type { LifecycleHooks, StartContext, StopContext } from "./lifecycle.js";
 import type { MiddlewareHandler } from "./middleware.js";
 import type { ActionPlugin, PluginErrorContext, PluginRequestContext, PluginResponseContext } from "./plugin.js";
 import { parseQuery, parseRequestBody } from "./request.js";
@@ -12,12 +14,6 @@ import { validateInput } from "./validation.js";
 
 interface RegisteredAction<TServices> {
   definition: AnyActionDefinition<TServices, any>;
-}
-
-interface LifecycleHooks<TServices> {
-  onRequest: Array<(context: PluginRequestContext<TServices, any>) => Promise<void>>;
-  onResponse: Array<(context: PluginResponseContext<TServices, any>) => Promise<void>>;
-  onError: Array<(context: PluginErrorContext<TServices, any>) => Promise<void>>;
 }
 
 export interface CreateActionAppOptions<TServices, TContext extends object = {}> {
@@ -33,6 +29,11 @@ export interface ActionApp<TServices, TContext extends object = {}> {
   plugin<TExtension extends object>(
     definition: ActionPlugin<TServices, TContext, TExtension>,
   ): ActionApp<TServices, TContext & TExtension>;
+  onStart(callback: (context: StartContext<TServices>) => MaybePromise<void>): ActionApp<TServices, TContext>;
+  onStop(callback: (context: StopContext<TServices>) => MaybePromise<void>): ActionApp<TServices, TContext>;
+  onRequest(callback: (context: PluginRequestContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext>;
+  onResponse(callback: (context: PluginResponseContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext>;
+  onError(callback: (context: PluginErrorContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext>;
   action<
     TMethod extends HttpMethod,
     TPath extends string,
@@ -85,6 +86,8 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
   const actions: RegisteredAction<TServices>[] = [];
   const middlewares: Array<MiddlewareHandler<TServices, any, any>> = [];
   const hooks: LifecycleHooks<TServices> = {
+    onStart: [],
+    onStop: [],
     onRequest: [],
     onResponse: [],
     onError: [],
@@ -96,65 +99,118 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
     });
   }
 
-  const createAppApi = <TCurrentContext extends object>(): ActionApp<TServices, TCurrentContext> => ({
-    get actions() {
-      return actions.map(({ definition }) => definition) as ReadonlyArray<AnyActionDefinition<TServices, TCurrentContext>>;
-    },
+  const createAppApi = <TCurrentContext extends object>(): ActionApp<TServices, TCurrentContext> => {
+    const app: ActionApp<TServices, TCurrentContext> = {
+      get actions() {
+        return actions.map(({ definition }) => definition) as ReadonlyArray<AnyActionDefinition<TServices, TCurrentContext>>;
+      },
 
-    use<TExtension extends object>(middleware: MiddlewareHandler<TServices, TCurrentContext, TExtension>) {
-      middlewares.push(middleware as MiddlewareHandler<TServices, any, any>);
-      return createAppApi<TCurrentContext & TExtension>();
-    },
-
-    plugin<TExtension extends object>(definition: ActionPlugin<TServices, TCurrentContext, TExtension>) {
-      for (const actionDefinition of definition.actions ?? []) {
-        actions.push({
-          definition: actionDefinition as AnyActionDefinition<TServices, any>,
-        });
-      }
-
-      for (const middleware of definition.middlewares ?? []) {
+      use<TExtension extends object>(middleware: MiddlewareHandler<TServices, TCurrentContext, TExtension>) {
         middlewares.push(middleware as MiddlewareHandler<TServices, any, any>);
-      }
+        return createAppApi<TCurrentContext & TExtension>();
+      },
 
-      if (definition.hooks?.onRequest) {
-        hooks.onRequest.push(async (context) => definition.hooks?.onRequest?.(context));
-      }
+      plugin<TExtension extends object>(definition: ActionPlugin<TServices, TCurrentContext, TExtension>) {
+        for (const actionDefinition of definition.actions ?? []) {
+          actions.push({
+            definition: actionDefinition as AnyActionDefinition<TServices, any>,
+          });
+        }
 
-      if (definition.hooks?.onResponse) {
-        hooks.onResponse.push(async (context) => definition.hooks?.onResponse?.(context));
-      }
+        for (const middleware of definition.middlewares ?? []) {
+          middlewares.push(middleware as MiddlewareHandler<TServices, any, any>);
+        }
 
-      if (definition.hooks?.onError) {
-        hooks.onError.push(async (context) => definition.hooks?.onError?.(context));
-      }
+        if (definition.hooks?.onStart) {
+          hooks.onStart.push(async (context) => definition.hooks?.onStart?.(context));
+        }
 
-      return createAppApi<TCurrentContext & TExtension>();
-    },
+        if (definition.hooks?.onStop) {
+          hooks.onStop.push(async (context) => definition.hooks?.onStop?.(context));
+        }
 
-    action(definition) {
-      actions.push({
-        definition: definition as AnyActionDefinition<TServices, any>,
-      });
+        if (definition.hooks?.onRequest) {
+          hooks.onRequest.push(async (context) => definition.hooks?.onRequest?.(context));
+        }
 
-      return createAppApi<TCurrentContext>();
-    },
+        if (definition.hooks?.onResponse) {
+          hooks.onResponse.push(async (context) => definition.hooks?.onResponse?.(context));
+        }
 
-    route(definition) {
-      return createAppApi<TCurrentContext>().action(definition);
-    },
+        if (definition.hooks?.onError) {
+          hooks.onError.push(async (context) => definition.hooks?.onError?.(context));
+        }
 
-    async fetch(request) {
-      const contextValues: ContextValues = {};
-      const middlewareContext = createMiddlewareContext(request, services, contextValues);
+        return createAppApi<TCurrentContext & TExtension>();
+      },
 
-      return runMiddlewares(middlewares, middlewareContext, () =>
-        dispatchRequest(request, services, actions, hooks, contextValues),
-      );
-    },
-  });
+      onStart(callback) {
+        hooks.onStart.push(async (context) => callback(context));
+        return createAppApi<TCurrentContext>();
+      },
+
+      onStop(callback) {
+        hooks.onStop.push(async (context) => callback(context));
+        return createAppApi<TCurrentContext>();
+      },
+
+      onRequest(callback) {
+        hooks.onRequest.push(async (context) => callback(context as PluginRequestContext<TServices, TCurrentContext>));
+        return createAppApi<TCurrentContext>();
+      },
+
+      onResponse(callback) {
+        hooks.onResponse.push(async (context) => callback(context as PluginResponseContext<TServices, TCurrentContext>));
+        return createAppApi<TCurrentContext>();
+      },
+
+      onError(callback) {
+        hooks.onError.push(async (context) => callback(context as PluginErrorContext<TServices, TCurrentContext>));
+        return createAppApi<TCurrentContext>();
+      },
+
+      action(definition) {
+        actions.push({
+          definition: definition as AnyActionDefinition<TServices, any>,
+        });
+
+        return createAppApi<TCurrentContext>();
+      },
+
+      route(definition) {
+        return createAppApi<TCurrentContext>().action(definition);
+      },
+
+      async fetch(request) {
+        const contextValues: ContextValues = {};
+        const middlewareContext = createMiddlewareContext(request, services, contextValues);
+
+        return runMiddlewares(middlewares, middlewareContext, () =>
+          dispatchRequest(request, services, actions, hooks, contextValues),
+        );
+      },
+    };
+
+    return setActionAppInternals(app, { services, hooks }) as ActionApp<TServices, TCurrentContext>;
+  };
 
   return createAppApi<TContext>();
+}
+
+export async function runStartHooks<TServices>(hooks: LifecycleHooks<TServices>, services: TServices): Promise<void> {
+  const context: StartContext<TServices> = { services };
+
+  for (const hook of hooks.onStart) {
+    await hook(context);
+  }
+}
+
+export async function runStopHooks<TServices>(hooks: LifecycleHooks<TServices>, services: TServices): Promise<void> {
+  const context: StopContext<TServices> = { services };
+
+  for (const hook of hooks.onStop) {
+    await hook(context);
+  }
 }
 
 async function dispatchRequest<TServices>(
@@ -223,7 +279,6 @@ async function dispatchRequest<TServices>(
       });
 
       const responseResult = finalizeActionResponse(result, registeredAction.definition.response, requestId);
-
       const response = responseResult.success ? responseResult.data : responseResult.response;
 
       return finalizeResponse(response, hookContext, hooks);
@@ -375,4 +430,12 @@ function getRequestId(contextValues: ContextValues): string | undefined {
   const value = contextValues.requestId;
 
   return typeof value === "string" ? value : undefined;
+}
+
+export function getAppLifecycleHooks<TServices, TContext extends object>(app: ActionApp<TServices, TContext>): LifecycleHooks<TServices> {
+  return getActionAppInternals(app).hooks;
+}
+
+export function getAppServices<TServices, TContext extends object>(app: ActionApp<TServices, TContext>): TServices {
+  return getActionAppInternals(app).services;
 }
