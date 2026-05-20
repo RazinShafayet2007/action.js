@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { action } from "@action-js/core";
 

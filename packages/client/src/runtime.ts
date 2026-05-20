@@ -1,4 +1,4 @@
-import { isActionErrorDefinition, isSchemaLike, type ActionDefinition, type ActionErrorDefinition, type ActionResponseDefinitions, type SchemaLike } from "@action-js/core";
+import { isActionErrorDefinition, isSchemaLike, type ActionErrorDefinition, type ActionResponseDefinitions, type SchemaLike } from "@action-js/core";
 
 import { ActionClientError } from "./error.js";
 import type { AnyAction, ClientActionTree, ClientFromTree, ClientRequestInput, CreateClientOptions } from "./types.js";
