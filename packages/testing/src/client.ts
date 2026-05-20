@@ -83,6 +83,7 @@ function createRequestBuilder<TServices, TContext extends object>(
     send() {
       return execute();
     },
+    // eslint-disable-next-line unicorn/no-thenable
     then(onfulfilled, onrejected) {
       return execute().then(onfulfilled, onrejected);
     },

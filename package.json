@@ -10,12 +10,13 @@
     "build": "turbo run build",
     "clean": "turbo run clean",
     "dev": "turbo run dev --parallel",
-    "lint": "turbo run lint",
+    "lint": "oxlint . --ignore-pattern dist --ignore-pattern coverage --ignore-pattern packages/cli/.tmp-cli-*",
     "test": "turbo run test",
     "typecheck": "turbo run typecheck"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "oxlint": "latest",
     "turbo": "^2.0.12",
     "typescript": "^5.6.3",
     "vitest": "^2.1.8",

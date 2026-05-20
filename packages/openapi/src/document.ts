@@ -1,4 +1,4 @@
-import type { ActionDefinition, ActionErrorDefinition, ActionResponseDefinitionValue, ActionResponseDefinitions, HttpMethod } from "@action-js/core";
+import type { ActionDefinition, ActionResponseDefinitionValue, ActionResponseDefinitions, HttpMethod } from "@action-js/core";
 import { isActionErrorDefinition } from "@action-js/core";
 
 import { getObjectSchemaProperties, isOptionalSchema, toErrorResponseSchema, toOpenApiSchema } from "./schemas.js";
