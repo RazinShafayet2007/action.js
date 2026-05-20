@@ -1,4 +1,13 @@
-import type { ActionContractResult, ActionDefinition, ActionResponseDefinitions, HttpMethod, MaybePromise } from "@action-js/core";
+import type {
+  ActionContractResult,
+  ActionDefinition,
+  ActionResponseDefinitions,
+  ConfigDefinition,
+  HttpMethod,
+  InferResolvedConfig,
+  MaybePromise,
+} from "@action-js/core";
+import { resolveConfig } from "@action-js/core";
 
 import { handleHandlerError } from "./errors.js";
 import { jsonResponse } from "./http.js";
@@ -16,24 +25,45 @@ interface RegisteredAction<TServices> {
   definition: AnyActionDefinition<TServices, any>;
 }
 
-export interface CreateActionAppOptions<TServices, TContext extends object = {}> {
-  actions?: ReadonlyArray<AnyActionDefinition<TServices, TContext>>;
+const CONFIG_CONTEXT_KEY = "config";
+
+type ConfigContext<TResolvedConfig> = [TResolvedConfig] extends [undefined]
+  ? {}
+  : {
+      readonly config: TResolvedConfig;
+    };
+
+type ResolvedConfigValue<TConfigDefinition extends ConfigDefinition<any> | undefined> = [TConfigDefinition] extends [undefined]
+  ? undefined
+  : InferResolvedConfig<NonNullable<TConfigDefinition>>;
+
+type ActionAppContext<TContext extends object, TResolvedConfig> = TContext & ConfigContext<TResolvedConfig>;
+
+export interface CreateActionAppOptions<
+  TServices,
+  TContext extends object = {},
+  TConfigDefinition extends ConfigDefinition<any> | undefined = undefined,
+> {
+  actions?: ReadonlyArray<AnyActionDefinition<TServices, ActionAppContext<TContext, ResolvedConfigValue<TConfigDefinition>>>>;
   services?: TServices;
+  config?: TConfigDefinition | undefined;
+  env?: Record<string, string | undefined> | undefined;
 }
 
-export interface ActionApp<TServices, TContext extends object = {}> {
+export interface ActionApp<TServices, TContext extends object = {}, TConfig = undefined> {
   readonly actions: ReadonlyArray<AnyActionDefinition<TServices, TContext>>;
+  readonly config: TConfig;
   use<TExtension extends object>(
     middleware: MiddlewareHandler<TServices, TContext, TExtension>,
-  ): ActionApp<TServices, TContext & TExtension>;
+  ): ActionApp<TServices, TContext & TExtension, TConfig>;
   plugin<TExtension extends object>(
     definition: ActionPlugin<TServices, TContext, TExtension>,
-  ): ActionApp<TServices, TContext & TExtension>;
-  onStart(callback: (context: StartContext<TServices>) => MaybePromise<void>): ActionApp<TServices, TContext>;
-  onStop(callback: (context: StopContext<TServices>) => MaybePromise<void>): ActionApp<TServices, TContext>;
-  onRequest(callback: (context: PluginRequestContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext>;
-  onResponse(callback: (context: PluginResponseContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext>;
-  onError(callback: (context: PluginErrorContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext>;
+  ): ActionApp<TServices, TContext & TExtension, TConfig>;
+  onStart(callback: (context: StartContext<TServices>) => MaybePromise<void>): ActionApp<TServices, TContext, TConfig>;
+  onStop(callback: (context: StopContext<TServices>) => MaybePromise<void>): ActionApp<TServices, TContext, TConfig>;
+  onRequest(callback: (context: PluginRequestContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext, TConfig>;
+  onResponse(callback: (context: PluginResponseContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext, TConfig>;
+  onError(callback: (context: PluginErrorContext<TServices, TContext>) => MaybePromise<void>): ActionApp<TServices, TContext, TConfig>;
   action<
     TMethod extends HttpMethod,
     TPath extends string,
@@ -54,7 +84,7 @@ export interface ActionApp<TServices, TContext extends object = {}> {
       TResponses,
       TResult
     >,
-  ): ActionApp<TServices, TContext>;
+  ): ActionApp<TServices, TContext, TConfig>;
   route<
     TMethod extends HttpMethod,
     TPath extends string,
@@ -75,13 +105,21 @@ export interface ActionApp<TServices, TContext extends object = {}> {
       TResponses,
       TResult
     >,
-  ): ActionApp<TServices, TContext>;
+  ): ActionApp<TServices, TContext, TConfig>;
   fetch(request: Request): Promise<Response>;
 }
 
-export function createActionApp<TServices = Record<string, never>, TContext extends object = {}>(
-  options: CreateActionAppOptions<TServices, TContext> = {},
-): ActionApp<TServices, TContext> {
+export function createActionApp<
+  TServices = Record<string, never>,
+  TContext extends object = {},
+  TConfigDefinition extends ConfigDefinition<any> | undefined = undefined,
+>(
+  options: CreateActionAppOptions<TServices, TContext, TConfigDefinition> = {},
+): ActionApp<
+  TServices,
+  ActionAppContext<TContext, ResolvedConfigValue<TConfigDefinition>>,
+  ResolvedConfigValue<TConfigDefinition>
+> {
   const services = options.services ?? ({} as TServices);
   const actions: RegisteredAction<TServices>[] = [];
   const middlewares: Array<MiddlewareHandler<TServices, any, any>> = [];
@@ -92,6 +130,7 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
     onResponse: [],
     onError: [],
   };
+  const resolvedConfig = (options.config ? resolveConfig(options.config, options.env) : undefined) as ResolvedConfigValue<TConfigDefinition>;
 
   for (const definition of options.actions ?? []) {
     actions.push({
@@ -99,10 +138,14 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
     });
   }
 
-  const createAppApi = <TCurrentContext extends object>(): ActionApp<TServices, TCurrentContext> => {
-    const app: ActionApp<TServices, TCurrentContext> = {
+  const createAppApi = <TCurrentContext extends object>(): ActionApp<TServices, TCurrentContext, ResolvedConfigValue<TConfigDefinition>> => {
+    const app: ActionApp<TServices, TCurrentContext, ResolvedConfigValue<TConfigDefinition>> = {
       get actions() {
         return actions.map(({ definition }) => definition) as ReadonlyArray<AnyActionDefinition<TServices, TCurrentContext>>;
+      },
+
+      get config() {
+        return resolvedConfig;
       },
 
       use<TExtension extends object>(middleware: MiddlewareHandler<TServices, TCurrentContext, TExtension>) {
@@ -183,18 +226,18 @@ export function createActionApp<TServices = Record<string, never>, TContext exte
 
       async fetch(request) {
         const contextValues: ContextValues = {};
-        const middlewareContext = createMiddlewareContext(request, services, contextValues);
+        const middlewareContext = createMiddlewareContext(request, services, contextValues, resolvedConfig);
 
         return runMiddlewares(middlewares, middlewareContext, () =>
-          dispatchRequest(request, services, actions, hooks, contextValues),
+          dispatchRequest(request, services, actions, hooks, contextValues, resolvedConfig),
         );
       },
     };
 
-    return setActionAppInternals(app, { services, hooks }) as ActionApp<TServices, TCurrentContext>;
+    return setActionAppInternals(app, { services, hooks }) as ActionApp<TServices, TCurrentContext, ResolvedConfigValue<TConfigDefinition>>;
   };
 
-  return createAppApi<TContext>();
+  return createAppApi<ActionAppContext<TContext, ResolvedConfigValue<TConfigDefinition>>>();
 }
 
 export async function runStartHooks<TServices>(hooks: LifecycleHooks<TServices>, services: TServices): Promise<void> {
@@ -219,11 +262,12 @@ async function dispatchRequest<TServices>(
   actions: Array<RegisteredAction<TServices>>,
   hooks: LifecycleHooks<TServices>,
   contextValues: ContextValues,
+  resolvedConfig: unknown,
 ): Promise<Response> {
   const url = new URL(request.url);
   const method = request.method.toUpperCase();
   const requestId = getRequestId(contextValues);
-  const hookContext = createHookContext(request, services, contextValues);
+  const hookContext = createHookContext(request, services, contextValues, resolvedConfig);
 
   try {
     await runRequestHooks(hooks.onRequest, hookContext);
@@ -271,6 +315,7 @@ async function dispatchRequest<TServices>(
     try {
       const result = await registeredAction.definition.handler({
         ...contextValues,
+        ...(resolvedConfig !== undefined ? { config: resolvedConfig } : {}),
         request,
         params: paramsResult.data,
         query: queryResult.data,
@@ -307,11 +352,16 @@ function createMiddlewareContext<TServices>(
   request: Request,
   services: TServices,
   contextValues: ContextValues,
+  resolvedConfig: unknown,
 ) {
   const middlewareContext = {
     request,
     services,
     setContext(extension: Record<string, unknown>) {
+      if (resolvedConfig !== undefined && CONFIG_CONTEXT_KEY in extension) {
+        throw new Error(`Context key '${CONFIG_CONTEXT_KEY}' is reserved by Action.js when app config is enabled`);
+      }
+
       Object.assign(contextValues, extension);
       Object.assign(middlewareContext, extension);
     },
@@ -321,12 +371,27 @@ function createMiddlewareContext<TServices>(
     setContext: (extension: Record<string, unknown>) => void;
   };
 
+  if (resolvedConfig !== undefined) {
+    Object.defineProperty(middlewareContext, CONFIG_CONTEXT_KEY, {
+      value: resolvedConfig,
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    });
+  }
+
   return middlewareContext;
 }
 
-function createHookContext<TServices>(request: Request, services: TServices, contextValues: ContextValues) {
+function createHookContext<TServices>(
+  request: Request,
+  services: TServices,
+  contextValues: ContextValues,
+  resolvedConfig: unknown,
+) {
   return {
     ...contextValues,
+    ...(resolvedConfig !== undefined ? { config: resolvedConfig } : {}),
     request,
     services,
   } as PluginRequestContext<TServices, any>;
@@ -432,10 +497,12 @@ function getRequestId(contextValues: ContextValues): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-export function getAppLifecycleHooks<TServices, TContext extends object>(app: ActionApp<TServices, TContext>): LifecycleHooks<TServices> {
+export function getAppLifecycleHooks<TServices, TContext extends object, TConfig>(
+  app: ActionApp<TServices, TContext, TConfig>,
+): LifecycleHooks<TServices> {
   return getActionAppInternals(app).hooks;
 }
 
-export function getAppServices<TServices, TContext extends object>(app: ActionApp<TServices, TContext>): TServices {
+export function getAppServices<TServices, TContext extends object, TConfig>(app: ActionApp<TServices, TContext, TConfig>): TServices {
   return getActionAppInternals(app).services;
 }

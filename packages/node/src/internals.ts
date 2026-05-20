@@ -8,20 +8,20 @@ export interface ActionAppInternals<TServices> {
   hooks: LifecycleHooks<TServices>;
 }
 
-type ActionAppWithInternals<TServices, TContext extends object> = ActionApp<TServices, TContext> & {
+type ActionAppWithTypedInternals<TServices, TContext extends object, TConfig> = ActionApp<TServices, TContext, TConfig> & {
   [actionAppInternals]: ActionAppInternals<TServices>;
 };
 
-export function setActionAppInternals<TServices, TContext extends object>(
-  app: ActionApp<TServices, TContext>,
+export function setActionAppInternals<TServices, TContext extends object, TConfig>(
+  app: ActionApp<TServices, TContext, TConfig>,
   internals: ActionAppInternals<TServices>,
-): ActionApp<TServices, TContext> {
-  (app as ActionAppWithInternals<TServices, TContext>)[actionAppInternals] = internals;
+): ActionApp<TServices, TContext, TConfig> {
+  (app as ActionAppWithTypedInternals<TServices, TContext, TConfig>)[actionAppInternals] = internals;
   return app;
 }
 
-export function getActionAppInternals<TServices, TContext extends object>(
-  app: ActionApp<TServices, TContext>,
+export function getActionAppInternals<TServices, TContext extends object, TConfig>(
+  app: ActionApp<TServices, TContext, TConfig>,
 ): ActionAppInternals<TServices> {
-  return (app as ActionAppWithInternals<TServices, TContext>)[actionAppInternals];
+  return (app as ActionAppWithTypedInternals<TServices, TContext, TConfig>)[actionAppInternals];
 }
