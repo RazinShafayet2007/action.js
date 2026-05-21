@@ -1,0 +1,19 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@action-js/auth": ["packages/auth/src/index.ts"],
+      "@action-js/cli": ["packages/cli/src/index.ts"],
+      "@action-js/client": ["packages/client/src/index.ts"],
+      "@action-js/core": ["packages/core/src/index.ts"],
+      "@action-js/drizzle": ["packages/drizzle/src/index.ts"],
+      "@action-js/jobs": ["packages/jobs/src/index.ts"],
+      "@action-js/node": ["packages/node/src/index.ts"],
+      "@action-js/openapi": ["packages/openapi/src/index.ts"],
+      "@action-js/prisma": ["packages/prisma/src/index.ts"],
+      "@action-js/redis": ["packages/redis/src/index.ts"],
+      "@action-js/testing": ["packages/testing/src/index.ts"]
+    }
+  }
+}
