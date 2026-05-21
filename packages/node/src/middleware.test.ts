@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { action } from "@action-js/core";
 
-import { createActionApp, requestId, type MiddlewareHandler } from "./index.js";
+import { createActionApp, cors, requestId, type MiddlewareHandler } from "./index.js";
 
 describe("middleware", () => {
   it("runs middleware in order and injects typed context into handlers", async () => {
@@ -113,5 +113,110 @@ describe("middleware", () => {
         requestId: "req_missing",
       },
     });
+  });
+
+  it("applies CORS headers for allowed origins", async () => {
+    const app = createActionApp()
+      .use(
+        cors({
+          origin: ["https://frontend.example.com"],
+          credentials: true,
+          exposedHeaders: ["x-request-id"],
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/posts",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "x-request-id": "req_cors",
+            },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/posts", {
+        headers: {
+          origin: "https://frontend.example.com",
+        },
+      }),
+    );
+
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://frontend.example.com");
+    expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+    expect(response.headers.get("access-control-expose-headers")).toBe("x-request-id");
+    expect(response.headers.get("vary")).toContain("Origin");
+  });
+
+  it("does not apply CORS headers for denied origins", async () => {
+    const app = createActionApp()
+      .use(
+        cors({
+          origin: ["https://allowed.example.com"],
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/posts",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/posts", {
+        headers: {
+          origin: "https://blocked.example.com",
+        },
+      }),
+    );
+
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("handles preflight requests automatically", async () => {
+    const app = createActionApp()
+      .use(
+        cors({
+          origin: true,
+          methods: ["GET", "POST"],
+          allowedHeaders: ["content-type", "authorization"],
+          maxAge: 600,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/posts",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/posts", {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://frontend.example.com",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type, authorization",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://frontend.example.com");
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST");
+    expect(response.headers.get("access-control-allow-headers")).toBe("content-type, authorization");
+    expect(response.headers.get("access-control-max-age")).toBe("600");
   });
 });
