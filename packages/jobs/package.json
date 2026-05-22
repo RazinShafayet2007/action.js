@@ -20,7 +20,7 @@
     "build": "tsc -p tsconfig.json",
     "clean": "rm -rf dist",
     "lint": "tsc -p tsconfig.json --noEmit",
-    "test": "node --eval \"console.log('No tests yet for @action-js/jobs')\"",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.typecheck.json"
   }
 }
