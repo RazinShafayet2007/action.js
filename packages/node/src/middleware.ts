@@ -23,6 +23,13 @@ export interface SecurityHeadersOptions {
   crossOriginResourcePolicy?: string | false | undefined;
 }
 
+export interface RateLimitOptions<TServices, TContext extends object> {
+  limit: number;
+  window: number | `${number}${"ms" | "s" | "m" | "h"}`;
+  key?: ((context: MiddlewareContext<TServices, TContext>) => MaybePromise<string>) | undefined;
+  now?: (() => number) | undefined;
+}
+
 export type MiddlewareContext<TServices, TContext extends object, TExtension extends object = {}> = TContext & {
   request: Request;
   services: TServices;
@@ -121,10 +128,74 @@ export function securityHeaders<TServices, TContext extends object = {}>(
   };
 }
 
+export function rateLimit<TServices, TContext extends object = {}>(
+  options: RateLimitOptions<TServices, TContext>,
+): MiddlewareHandler<TServices, TContext> {
+  const windowMs = parseDuration(options.window);
+  const entries = new Map<string, { count: number; resetAt: number }>();
+
+  return async (context, next) => {
+    const now = options.now?.() ?? Date.now();
+    const key = options.key ? await options.key(context) : defaultRateLimitKey(context.request);
+    const currentEntry = entries.get(key);
+    const entry = !currentEntry || now >= currentEntry.resetAt
+      ? { count: 0, resetAt: now + windowMs }
+      : currentEntry;
+
+    entry.count += 1;
+    entries.set(key, entry);
+
+    const remaining = Math.max(options.limit - entry.count, 0);
+    const resetSeconds = Math.max(0, Math.ceil((entry.resetAt - now) / 1000));
+    const resetAtSeconds = Math.ceil(entry.resetAt / 1000);
+
+    if (entry.count > options.limit) {
+      const headers = new Headers({
+        "content-type": "application/json; charset=utf-8",
+      });
+
+      applyRateLimitHeaders(headers, {
+        limit: options.limit,
+        remaining: 0,
+        resetAtSeconds,
+        retryAfterSeconds: resetSeconds,
+      });
+
+      return new Response(
+        JSON.stringify({
+          error: {
+            code: "RATE_LIMITED",
+            message: "Too many requests",
+          },
+        }),
+        {
+          status: 429,
+          headers,
+        },
+      );
+    }
+
+    const response = await next();
+
+    applyRateLimitHeaders(response.headers, {
+      limit: options.limit,
+      remaining,
+      resetAtSeconds,
+      retryAfterSeconds: resetSeconds,
+    });
+
+    return response;
+  };
+}
+
 type CorsOriginResolver = (origin: string | null) => boolean | string | null;
 
 function defaultRequestIdGenerator(): string {
   return crypto.randomUUID();
+}
+
+function defaultRateLimitKey(request: Request): string {
+  return request.headers.get("x-forwarded-for") ?? request.headers.get("cf-connecting-ip") ?? "global";
 }
 
 function resolveCorsOrigin(
@@ -220,4 +291,47 @@ function appendVary(headers: Headers, value: string): void {
   if (!values.includes(value)) {
     headers.set("vary", `${current}, ${value}`);
   }
+}
+
+function parseDuration(value: number | `${number}${"ms" | "s" | "m" | "h"}`): number {
+  if (typeof value === "number") {
+    return value;
+  }
+
+  const match = /^(\d+)(ms|s|m|h)$/.exec(value);
+
+  if (!match) {
+    throw new Error(`Invalid rate limit window: ${value}`);
+  }
+
+  const amount = Number(match[1]);
+  const unit = match[2];
+
+  switch (unit) {
+    case "ms":
+      return amount;
+    case "s":
+      return amount * 1000;
+    case "m":
+      return amount * 60_000;
+    case "h":
+      return amount * 3_600_000;
+    default:
+      throw new Error(`Unsupported rate limit unit: ${unit}`);
+  }
+}
+
+function applyRateLimitHeaders(
+  headers: Headers,
+  options: {
+    limit: number;
+    remaining: number;
+    resetAtSeconds: number;
+    retryAfterSeconds: number;
+  },
+): void {
+  headers.set("x-ratelimit-limit", String(options.limit));
+  headers.set("x-ratelimit-remaining", String(options.remaining));
+  headers.set("x-ratelimit-reset", String(options.resetAtSeconds));
+  headers.set("retry-after", String(options.retryAfterSeconds));
 }
