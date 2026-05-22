@@ -91,6 +91,14 @@ export async function parseRequestBody(
   }
 }
 
+export async function readRawRequestBody(request: Request): Promise<string | undefined> {
+  if (request.method === "GET" || request.method === "HEAD" || request.body === null) {
+    return undefined;
+  }
+
+  return request.clone().text();
+}
+
 function isJsonContentType(contentType: string): boolean {
   return contentType.toLowerCase().includes("application/json");
 }

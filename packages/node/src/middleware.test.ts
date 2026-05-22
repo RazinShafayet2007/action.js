@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { action } from "@action-js/core";
 
-import { createActionApp, requestId, type MiddlewareHandler } from "./index.js";
+import { createActionApp, cors, rateLimit, requestId, securityHeaders, type MiddlewareHandler } from "./index.js";
 
 describe("middleware", () => {
   it("runs middleware in order and injects typed context into handlers", async () => {
@@ -113,5 +113,333 @@ describe("middleware", () => {
         requestId: "req_missing",
       },
     });
+  });
+
+  it("applies CORS headers for allowed origins", async () => {
+    const app = createActionApp()
+      .use(
+        cors({
+          origin: ["https://frontend.example.com"],
+          credentials: true,
+          exposedHeaders: ["x-request-id"],
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/posts",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "x-request-id": "req_cors",
+            },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/posts", {
+        headers: {
+          origin: "https://frontend.example.com",
+        },
+      }),
+    );
+
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://frontend.example.com");
+    expect(response.headers.get("access-control-allow-credentials")).toBe("true");
+    expect(response.headers.get("access-control-expose-headers")).toBe("x-request-id");
+    expect(response.headers.get("vary")).toContain("Origin");
+  });
+
+  it("does not apply CORS headers for denied origins", async () => {
+    const app = createActionApp()
+      .use(
+        cors({
+          origin: ["https://allowed.example.com"],
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/posts",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/posts", {
+        headers: {
+          origin: "https://blocked.example.com",
+        },
+      }),
+    );
+
+    expect(response.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
+  it("handles preflight requests automatically", async () => {
+    const app = createActionApp()
+      .use(
+        cors({
+          origin: true,
+          methods: ["GET", "POST"],
+          allowedHeaders: ["content-type", "authorization"],
+          maxAge: 600,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/posts",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(
+      new Request("http://localhost/posts", {
+        method: "OPTIONS",
+        headers: {
+          origin: "https://frontend.example.com",
+          "access-control-request-method": "POST",
+          "access-control-request-headers": "content-type, authorization",
+        },
+      }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("access-control-allow-origin")).toBe("https://frontend.example.com");
+    expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST");
+    expect(response.headers.get("access-control-allow-headers")).toBe("content-type, authorization");
+    expect(response.headers.get("access-control-max-age")).toBe("600");
+  });
+
+  it("applies default security headers", async () => {
+    const app = createActionApp()
+      .use(securityHeaders())
+      .action(
+        action({
+          method: "GET",
+          path: "/secure",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(new Request("http://localhost/secure"));
+
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("permissions-policy")).toBe("camera=(), geolocation=(), microphone=()");
+    expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+  });
+
+  it("allows overriding and disabling security headers", async () => {
+    const app = createActionApp()
+      .use(
+        securityHeaders({
+          frameOptions: "SAMEORIGIN",
+          referrerPolicy: "strict-origin-when-cross-origin",
+          permissionsPolicy: false,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/secure",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(new Request("http://localhost/secure"));
+
+    expect(response.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("permissions-policy")).toBeNull();
+  });
+
+  it("does not overwrite security headers already set by the response", async () => {
+    const app = createActionApp()
+      .use(securityHeaders())
+      .action(
+        action({
+          method: "GET",
+          path: "/secure",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "x-frame-options": "SAMEORIGIN",
+              "referrer-policy": "origin",
+            },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(new Request("http://localhost/secure"));
+
+    expect(response.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(response.headers.get("referrer-policy")).toBe("origin");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("applies rate limit headers to successful responses", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 2,
+          window: "1m",
+          now: () => now,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const first = await app.fetch(new Request("http://localhost/limited"));
+    const second = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-ratelimit-limit")).toBe("2");
+    expect(first.headers.get("x-ratelimit-remaining")).toBe("1");
+    expect(first.headers.get("retry-after")).toBe("60");
+
+    expect(second.status).toBe(200);
+    expect(second.headers.get("x-ratelimit-remaining")).toBe("0");
+  });
+
+  it("returns 429 when the rate limit is exceeded", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: "1m",
+          now: () => now,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    await app.fetch(new Request("http://localhost/limited"));
+    const response = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-ratelimit-limit")).toBe("1");
+    expect(response.headers.get("x-ratelimit-remaining")).toBe("0");
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many requests",
+      },
+    });
+  });
+
+  it("resets counters after the configured window", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: "1s",
+          now: () => now,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    await app.fetch(new Request("http://localhost/limited"));
+    const blocked = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(blocked.status).toBe(429);
+
+    now = 1_001;
+
+    const reset = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(reset.status).toBe(200);
+    expect(reset.headers.get("x-ratelimit-remaining")).toBe("0");
+  });
+
+  it("uses the custom key resolver to isolate independent callers", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: "1m",
+          now: () => now,
+          key: ({ request }) => request.headers.get("x-client-id") ?? "anonymous",
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const firstClient = await app.fetch(
+      new Request("http://localhost/limited", {
+        headers: {
+          "x-client-id": "client-1",
+        },
+      }),
+    );
+    const secondClient = await app.fetch(
+      new Request("http://localhost/limited", {
+        headers: {
+          "x-client-id": "client-2",
+        },
+      }),
+    );
+
+    expect(firstClient.status).toBe(200);
+    expect(secondClient.status).toBe(200);
   });
 });

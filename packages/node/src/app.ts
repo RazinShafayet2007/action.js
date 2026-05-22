@@ -15,10 +15,10 @@ import { getActionAppInternals, setActionAppInternals } from "./internals.js";
 import type { LifecycleHooks, StartContext, StopContext } from "./lifecycle.js";
 import type { MiddlewareHandler } from "./middleware.js";
 import type { ActionPlugin, PluginErrorContext, PluginRequestContext, PluginResponseContext } from "./plugin.js";
-import { parseQuery, parseRequestBody } from "./request.js";
+import { parseQuery, parseRequestBody, readRawRequestBody } from "./request.js";
 import { finalizeActionResponse } from "./response-contracts.js";
 import { matchPath } from "./routing.js";
-import type { AnyActionDefinition, ContextValues } from "./shared.js";
+import { isWebhookActionDefinition, type AnyActionDefinition, type ContextValues } from "./shared.js";
 import { validateInput } from "./validation.js";
 
 interface RegisteredAction<TServices> {
@@ -287,6 +287,9 @@ async function dispatchRequest<TServices>(
     }
 
     const query = parseQuery(url.searchParams);
+    const rawBody = isWebhookActionDefinition(registeredAction.definition)
+      ? await readRawRequestBody(request)
+      : undefined;
 
     const paramsResult = validateInput("params", registeredAction.definition.params, params, requestId);
 
@@ -313,9 +316,20 @@ async function dispatchRequest<TServices>(
     }
 
     try {
+      if (isWebhookActionDefinition(registeredAction.definition) && registeredAction.definition.verify) {
+        await registeredAction.definition.verify({
+          ...contextValues,
+          request,
+          rawBody: rawBody ?? "",
+          headers: request.headers,
+          services,
+        });
+      }
+
       const result = await registeredAction.definition.handler({
         ...contextValues,
         ...(resolvedConfig !== undefined ? { config: resolvedConfig } : {}),
+        ...(rawBody !== undefined ? { rawBody } : {}),
         request,
         params: paramsResult.data,
         query: queryResult.data,
