@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { action } from "@action-js/core";
 
-import { createActionApp, cors, requestId, type MiddlewareHandler } from "./index.js";
+import { createActionApp, cors, requestId, securityHeaders, type MiddlewareHandler } from "./index.js";
 
 describe("middleware", () => {
   it("runs middleware in order and injects typed context into handlers", async () => {
@@ -218,5 +218,81 @@ describe("middleware", () => {
     expect(response.headers.get("access-control-allow-methods")).toBe("GET, POST");
     expect(response.headers.get("access-control-allow-headers")).toBe("content-type, authorization");
     expect(response.headers.get("access-control-max-age")).toBe("600");
+  });
+
+  it("applies default security headers", async () => {
+    const app = createActionApp()
+      .use(securityHeaders())
+      .action(
+        action({
+          method: "GET",
+          path: "/secure",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(new Request("http://localhost/secure"));
+
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+    expect(response.headers.get("x-frame-options")).toBe("DENY");
+    expect(response.headers.get("referrer-policy")).toBe("no-referrer");
+    expect(response.headers.get("permissions-policy")).toBe("camera=(), geolocation=(), microphone=()");
+    expect(response.headers.get("cross-origin-opener-policy")).toBe("same-origin");
+    expect(response.headers.get("cross-origin-resource-policy")).toBe("same-origin");
+  });
+
+  it("allows overriding and disabling security headers", async () => {
+    const app = createActionApp()
+      .use(
+        securityHeaders({
+          frameOptions: "SAMEORIGIN",
+          referrerPolicy: "strict-origin-when-cross-origin",
+          permissionsPolicy: false,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/secure",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(new Request("http://localhost/secure"));
+
+    expect(response.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(response.headers.get("referrer-policy")).toBe("strict-origin-when-cross-origin");
+    expect(response.headers.get("permissions-policy")).toBeNull();
+  });
+
+  it("does not overwrite security headers already set by the response", async () => {
+    const app = createActionApp()
+      .use(securityHeaders())
+      .action(
+        action({
+          method: "GET",
+          path: "/secure",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+            headers: {
+              "x-frame-options": "SAMEORIGIN",
+              "referrer-policy": "origin",
+            },
+          }),
+        }),
+      );
+
+    const response = await app.fetch(new Request("http://localhost/secure"));
+
+    expect(response.headers.get("x-frame-options")).toBe("SAMEORIGIN");
+    expect(response.headers.get("referrer-policy")).toBe("origin");
+    expect(response.headers.get("x-content-type-options")).toBe("nosniff");
   });
 });
