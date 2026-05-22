@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
-import { action } from "@action-js/core";
+import { action, webhook } from "@action-js/core";
 
 import { createActionApp } from "./index.js";
 
@@ -75,6 +75,81 @@ describe("request validation", () => {
             message: "Invalid JSON body",
           },
         ],
+      },
+    });
+  });
+
+  it("passes rawBody into webhook handlers and verify callbacks", async () => {
+    let verifiedRawBody = "";
+
+    const app = createActionApp().action(
+      webhook({
+        path: "/webhooks/stripe",
+        body: z.object({
+          event: z.string(),
+        }),
+        verify: async ({ rawBody }) => {
+          verifiedRawBody = rawBody;
+        },
+        handler: ({ rawBody, body }) => ({
+          status: 200,
+          body: {
+            rawBody,
+            event: body.event,
+          },
+        }),
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/webhooks/stripe", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+        },
+        body: JSON.stringify({ event: "checkout.session.completed" }),
+      }),
+    );
+
+    expect(verifiedRawBody).toBe('{"event":"checkout.session.completed"}');
+    await expect(response.json()).resolves.toEqual({
+      rawBody: '{"event":"checkout.session.completed"}',
+      event: "checkout.session.completed",
+    });
+  });
+
+  it("returns a 500 response when webhook verification fails", async () => {
+    const app = createActionApp().action(
+      webhook({
+        path: "/webhooks/stripe",
+        verify: async ({ headers, rawBody }) => {
+          if (headers.get("stripe-signature") !== rawBody) {
+            throw new Error("Invalid signature");
+          }
+        },
+        handler: ({ rawBody }) => ({
+          status: 200,
+          body: { rawBody },
+        }),
+      }),
+    );
+
+    const response = await app.fetch(
+      new Request("http://localhost/webhooks/stripe", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "stripe-signature": "invalid",
+        },
+        body: JSON.stringify({ ok: true }),
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "INTERNAL_ERROR",
+        message: "Something went wrong",
       },
     });
   });
