@@ -2,7 +2,7 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { action } from "@action-js/core";
 
-import { createActionApp, cors, requestId, securityHeaders, type MiddlewareHandler } from "./index.js";
+import { createActionApp, cors, rateLimit, requestId, securityHeaders, type MiddlewareHandler } from "./index.js";
 
 describe("middleware", () => {
   it("runs middleware in order and injects typed context into handlers", async () => {
@@ -294,5 +294,152 @@ describe("middleware", () => {
     expect(response.headers.get("x-frame-options")).toBe("SAMEORIGIN");
     expect(response.headers.get("referrer-policy")).toBe("origin");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("applies rate limit headers to successful responses", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 2,
+          window: "1m",
+          now: () => now,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const first = await app.fetch(new Request("http://localhost/limited"));
+    const second = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(first.status).toBe(200);
+    expect(first.headers.get("x-ratelimit-limit")).toBe("2");
+    expect(first.headers.get("x-ratelimit-remaining")).toBe("1");
+    expect(first.headers.get("retry-after")).toBe("60");
+
+    expect(second.status).toBe(200);
+    expect(second.headers.get("x-ratelimit-remaining")).toBe("0");
+  });
+
+  it("returns 429 when the rate limit is exceeded", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: "1m",
+          now: () => now,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    await app.fetch(new Request("http://localhost/limited"));
+    const response = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(response.status).toBe(429);
+    expect(response.headers.get("x-ratelimit-limit")).toBe("1");
+    expect(response.headers.get("x-ratelimit-remaining")).toBe("0");
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "RATE_LIMITED",
+        message: "Too many requests",
+      },
+    });
+  });
+
+  it("resets counters after the configured window", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: "1s",
+          now: () => now,
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    await app.fetch(new Request("http://localhost/limited"));
+    const blocked = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(blocked.status).toBe(429);
+
+    now = 1_001;
+
+    const reset = await app.fetch(new Request("http://localhost/limited"));
+
+    expect(reset.status).toBe(200);
+    expect(reset.headers.get("x-ratelimit-remaining")).toBe("0");
+  });
+
+  it("uses the custom key resolver to isolate independent callers", async () => {
+    let now = 0;
+
+    const app = createActionApp()
+      .use(
+        rateLimit({
+          limit: 1,
+          window: "1m",
+          now: () => now,
+          key: ({ request }) => request.headers.get("x-client-id") ?? "anonymous",
+        }),
+      )
+      .action(
+        action({
+          method: "GET",
+          path: "/limited",
+          handler: () => ({
+            status: 200,
+            body: { ok: true },
+          }),
+        }),
+      );
+
+    const firstClient = await app.fetch(
+      new Request("http://localhost/limited", {
+        headers: {
+          "x-client-id": "client-1",
+        },
+      }),
+    );
+    const secondClient = await app.fetch(
+      new Request("http://localhost/limited", {
+        headers: {
+          "x-client-id": "client-2",
+        },
+      }),
+    );
+
+    expect(firstClient.status).toBe(200);
+    expect(secondClient.status).toBe(200);
   });
 });
