@@ -14,6 +14,15 @@ export interface CorsOptions {
   maxAge?: number | undefined;
 }
 
+export interface SecurityHeadersOptions {
+  contentTypeOptions?: string | false | undefined;
+  frameOptions?: string | false | undefined;
+  referrerPolicy?: string | false | undefined;
+  permissionsPolicy?: string | false | undefined;
+  crossOriginOpenerPolicy?: string | false | undefined;
+  crossOriginResourcePolicy?: string | false | undefined;
+}
+
 export type MiddlewareContext<TServices, TContext extends object, TExtension extends object = {}> = TContext & {
   request: Request;
   services: TServices;
@@ -82,6 +91,31 @@ export function cors<TServices, TContext extends object = {}>(
       credentials: options.credentials,
       maxAge: options.maxAge,
     });
+
+    return response;
+  };
+}
+
+export function securityHeaders<TServices, TContext extends object = {}>(
+  options: SecurityHeadersOptions = {},
+): MiddlewareHandler<TServices, TContext> {
+  const resolvedHeaders = {
+    "x-content-type-options": options.contentTypeOptions ?? "nosniff",
+    "x-frame-options": options.frameOptions ?? "DENY",
+    "referrer-policy": options.referrerPolicy ?? "no-referrer",
+    "permissions-policy": options.permissionsPolicy ?? "camera=(), geolocation=(), microphone=()",
+    "cross-origin-opener-policy": options.crossOriginOpenerPolicy ?? "same-origin",
+    "cross-origin-resource-policy": options.crossOriginResourcePolicy ?? "same-origin",
+  } as const;
+
+  return async (_context, next) => {
+    const response = await next();
+
+    for (const [key, value] of Object.entries(resolvedHeaders)) {
+      if (value !== false && !response.headers.has(key)) {
+        response.headers.set(key, value);
+      }
+    }
 
     return response;
   };
