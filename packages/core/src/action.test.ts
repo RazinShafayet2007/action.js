@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { action, type ActionContext } from "./index.js";
+import { action, type ActionContext, webhook } from "./index.js";
 
 describe("action", () => {
   it("creates an action definition with method and path metadata", async () => {
@@ -115,5 +115,31 @@ describe("action", () => {
     });
 
     expect(getUser.response?.[200]).toBeDefined();
+  });
+
+  it("creates a webhook action with rawBody-aware context and verify metadata", () => {
+    const stripeWebhook = webhook({
+      path: "/webhooks/stripe",
+      body: z.object({
+        event: z.string(),
+      }),
+      verify: async ({ rawBody, headers }) => {
+        return headers.get("stripe-signature") === rawBody ? undefined : Promise.reject(new Error("invalid"));
+      },
+      handler: ({ rawBody, body }) => ({
+        status: 200,
+        body: {
+          rawBody,
+          event: body.event,
+        },
+      }),
+    });
+
+    expect(stripeWebhook.method).toBe("POST");
+    expect(stripeWebhook.path).toBe("/webhooks/stripe");
+    expect(stripeWebhook.webhook).toBe(true);
+    expect(stripeWebhook.verify).toBeDefined();
+
+    expectTypeOf<Parameters<typeof stripeWebhook.handler>[0]["rawBody"]>().toEqualTypeOf<string>();
   });
 });
